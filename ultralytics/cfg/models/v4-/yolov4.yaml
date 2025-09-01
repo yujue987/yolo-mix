@@ -1,0 +1,52 @@
+# YOLOv4 网络结构配置文件
+# 参考: YOLOv4: Optimal Speed and Accuracy of Object Detection
+
+# 参数配置
+nc: 80  # COCO数据集80个类别
+depth_multiple: 1.0
+width_multiple: 1.0
+anchors:
+  - [12, 16, 19, 36, 40, 28]   # P5/32
+  - [36, 75, 76, 55, 72, 146]  # P4/16
+  - [142, 110, 192, 243, 459, 401]  # P3/8
+
+# CSPDarknet53 骨干网络
+backbone:
+  # [from, number, module, args]
+  # 初始卷积层
+  - [-1, 1, Conv, [32, 3, 1]]          # 0-P1/2
+  - [-1, 1, Conv, [64, 3, 2]]          # 1-P2/4
+  - [-1, 1, CSPBlock, [64]]            # 2
+  - [-1, 1, Conv, [128, 3, 2]]         # 3-P3/8
+  - [-1, 2, CSPBlock, [128]]           # 4-5
+  - [-1, 1, Conv, [256, 3, 2]]         # 6-P4/16
+  - [-1, 8, CSPBlock, [256]]           # 7-14
+  - [-1, 1, Conv, [512, 3, 2]]         # 15-P5/32
+  - [-1, 8, CSPBlock, [512]]           # 16-23
+  - [-1, 1, SPP, [512, [5, 9, 13]]]    # 24 SPP模块
+
+# 颈部网络 (Neck): SPP + PANet
+neck:
+  # 上采样路径 (自顶向下)
+  - [-1, 1, Conv, [256, 1, 1]]         # 25
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 26
+  - [[-1, 14], 1, Concat, [1]]         # 27 连接第14层
+  - [-1, 2, CSPBlock, [256, False]]    # 28-29
+  
+  - [-1, 1, Conv, [128, 1, 1]]         # 30
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]] # 31
+  - [[-1, 5], 1, Concat, [1]]          # 32 连接第5层
+  - [-1, 2, CSPBlock, [128, False]]    # 33-34 (P3/8-small)
+  
+  # 下采样路径 (自底向上)
+  - [-1, 1, Conv, [256, 3, 2]]         # 35
+  - [[-1, 29], 1, Concat, [1]]         # 36 连接第29层
+  - [-1, 2, CSPBlock, [256, False]]    # 37-38 (P4/16-medium)
+  
+  - [-1, 1, Conv, [512, 3, 2]]         # 39
+  - [[-1, 24], 1, Concat, [1]]         # 40 连接第24层
+  - [-1, 2, CSPBlock, [512, False]]    # 41-42 (P5/32-large)
+
+# YOLOv4 检测头
+head:
+  - [[34, 38, 42], 1, YOLOv4Detect, [nc, anchors]]  # 检测层(P3, P4, P5)
