@@ -2005,3 +2005,73 @@ class Passthrough(nn.Module):
         x = x.view(batch_size, channels * 4, height // 2, width // 2)
         
         return x
+
+# to realize yolo4
+# YOLOv4 CSPBlock implementation
+class CSPBlock(nn.Module):
+    """
+    CSP Block for YOLOv4 backbone network.
+    
+    This module implements the Cross Stage Partial (CSP) connection used in YOLOv4's CSPDarknet53 backbone.
+    It's based on the BottleneckCSP implementation but simplified for YOLOv4's specific requirements.
+    
+    The CSP design allows gradients to flow through different paths, reducing computation while
+    maintaining accuracy. This implementation uses the same structure as BottleneckCSP but provides
+    a YOLOv4-specific interface.
+    
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels (default: same as input).
+        n (int): Number of bottleneck layers (default: 1).
+        shortcut (bool): Whether to use shortcut connection (default: True).
+        g (int): Groups for convolution (default: 1).
+        e (float): Expansion ratio for hidden channels (default: 0.5).
+        
+    Attributes:
+        Same as BottleneckCSP module.
+        
+    Methods:
+        forward: Forward pass through the CSP block.
+        
+    Examples:
+        >>> csp = CSPBlock(256, 256, n=8)  # For backbone with 8 bottlenecks
+        >>> x = torch.randn(1, 256, 52, 52)
+        >>> output = csp(x)  # Output: (1, 256, 52, 52)
+    """
+    
+    def __init__(self, c1, c2=None, n=1, shortcut=True, g=1, e=0.5):
+        """
+        Initialize CSPBlock for YOLOv4.
+        
+        Args:
+            c1 (int): Input channels
+            c2 (int, optional): Output channels. If None, defaults to c1
+            n (int): Number of bottleneck layers
+            shortcut (bool): Whether to use shortcut connections
+            g (int): Groups for grouped convolution
+            e (float): Channel expansion ratio
+        """
+        super().__init__()
+        
+        # If output channels not specified, use input channels
+        if c2 is None:
+            c2 = c1
+            
+        # Use BottleneckCSP as the underlying implementation
+        self.csp = BottleneckCSP(c1, c2, n, shortcut, g, e)
+        
+    def forward(self, x):
+        """
+        Forward pass through CSPBlock.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch, c1, height, width)
+            
+        Returns:
+            torch.Tensor: Output tensor of shape (batch, c2, height, width)
+        """
+        return self.csp(x)
+
+
+# For backward compatibility and alternative usage
+CSPDarknetBlock = CSPBlock  # Alias for CSPBlock

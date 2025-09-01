@@ -74,6 +74,8 @@ from ultralytics.nn.modules import (
     Passthrough,  # YOLOv2
     YOLOv1Detect,
     YOLOv2Detect,
+    CSPBlock,  # YOLOv4
+    YOLOv4Detect,  # YOLOv4
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -86,6 +88,7 @@ from ultralytics.utils.loss import (
     v8SegmentationLoss,
     YOLOv1Loss,
     YOLOv2Loss,
+    YOLOv4Loss,
 )
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
@@ -403,6 +406,9 @@ class DetectionModel(BaseModel):
         #to realize yolov2
         elif isinstance(m, YOLOv2Detect):
             return YOLOv2Loss(self)
+        #to realize yolov4
+        elif isinstance(m, YOLOv4Detect):
+            return YOLOv4Loss(self)  # 使用专用的YOLOv4损失函数
         return E2EDetectLoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
 
 
@@ -1016,7 +1022,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             C2fCIB,
             A2C2f,
             DSC3k2,
-            DSConv
+            DSConv,
+            CSPBlock  # YOLOv4
         }:
             c1, c2 = ch[f], args[0]
             # Check if this is the output layer before YOLOv2Detect (skip make_divisible for YOLOv2)
@@ -1053,7 +1060,8 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2fCIB,
                 C2PSA,
                 A2C2f,
-                DSC3k2
+                DSC3k2,
+                CSPBlock  # YOLOv4
             }:
                 args.insert(2, n)  # number of repeats
                 n = 1
@@ -1080,11 +1088,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect}:
+        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect, YOLOv4Detect}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, Segment, Pose, OBB}:
+            if m in {Detect, Segment, Pose, OBB, YOLOv4Detect}:
                 m.legacy = legacy
         #to realize yolov1
         elif m is YOLOv1Detect:
@@ -1232,7 +1240,7 @@ def guess_model_task(model):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect, v10Detect, YOLOv1Detect, YOLOv2Detect)):
+            elif isinstance(m, (Detect, WorldDetect, v10Detect, YOLOv1Detect, YOLOv2Detect, YOLOv4Detect)):
                 return "detect"
 
     # Guess from model filename

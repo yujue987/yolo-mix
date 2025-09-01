@@ -63,7 +63,8 @@ from .block import (
     FullPAD_Tunnel,
     DSC3k2,
     Reshape,
-    Passthrough  # YOLOv2
+    Passthrough,  # YOLOv2
+    CSPBlock  # YOLOv4
 )
 from .conv import (
     CBAM,
@@ -82,7 +83,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
-from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect, YOLOv1Detect, YOLOv2Detect
+from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect, YOLOv1Detect, YOLOv2Detect, YOLOv4Detect
 from .transformer import (
     AIFI,
     MLP,
@@ -153,6 +154,7 @@ __all__ = (
     "v10Detect",
     "YOLOv1Detect",
     "YOLOv2Detect",
+    "YOLOv4Detect",
     "ImagePoolingAttn",
     "ContrastiveHead",
     "BNContrastiveHead",
@@ -177,5 +179,6 @@ __all__ = (
     "DSC3k2",
     "DSConv",
     "Reshape",
-    "Passthrough"
+    "Passthrough",
+    "CSPBlock"
 )

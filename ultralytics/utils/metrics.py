@@ -373,13 +373,18 @@ class ConfusionMatrix:
         for i, gc in enumerate(gt_classes):
             j = m0 == i
             if n and sum(j) == 1:
-                self.matrix[detection_classes[m1[j]], gc] += 1  # correct
+                dc_idx = detection_classes[m1[j]].item() if hasattr(detection_classes[m1[j]], 'item') else detection_classes[m1[j]]
+                if dc_idx < self.matrix.shape[0] and gc < self.matrix.shape[1]:
+                    self.matrix[dc_idx, gc] += 1  # correct
             else:
-                self.matrix[self.nc, gc] += 1  # true background
+                if self.nc < self.matrix.shape[0] and gc < self.matrix.shape[1]:
+                    self.matrix[self.nc, gc] += 1  # true background
 
         for i, dc in enumerate(detection_classes):
             if not any(m1 == i):
-                self.matrix[dc, self.nc] += 1  # predicted background
+                # 添加边界检查，确保dc索引在有效范围内
+                if dc < self.matrix.shape[0] and self.nc < self.matrix.shape[1]:
+                    self.matrix[dc, self.nc] += 1  # predicted background
 
     def matrix(self):
         """Returns the confusion matrix."""

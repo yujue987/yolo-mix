@@ -15,7 +15,7 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOv1Detect", "YOLOv2Detect"
+__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOv1Detect", "YOLOv2Detect", "YOLOv4Detect"
 
 
 class Detect(nn.Module):
@@ -832,3 +832,178 @@ class YOLOv2Detect(nn.Module):
         output = torch.cat([pred_boxes, pred_conf, pred_cls], dim=-1)
         
         return output
+
+# to realize yolo4
+# YOLOv4 Detection Head
+class YOLOv4Detect(nn.Module):
+    """
+    YOLOv4 detection head for multi-scale object detection.
+    
+    This detection head implements YOLOv4's approach with anchor-based detection at multiple scales.
+    It uses the same anchor mechanism as YOLOv2 but supports multiple detection layers (P3, P4, P5)
+    for better detection of objects at different scales.
+    
+    YOLOv4 improvements over YOLOv2/v3:
+    - Uses CSPDarknet53 backbone
+    - SPP (Spatial Pyramid Pooling) module
+    - PANet (Path Aggregation Network) neck
+    - Advanced data augmentation and training techniques
+    
+    Attributes:
+        nc (int): Number of classes.
+        anchors (torch.Tensor): Anchor boxes for all scales.
+        na (int): Number of anchors per scale.
+        nl (int): Number of detection layers (3 for P3, P4, P5).
+        grid (list): Grid coordinates for each scale.
+        anchor_grid (torch.Tensor): Anchor grids for each scale.
+        stride (torch.Tensor): Stride for each detection layer.
+        
+    Methods:
+        forward: Forward pass through YOLOv4 detection head.
+        _make_grid: Create grid coordinates for a given scale.
+        
+    Examples:
+        >>> anchors = [[[12,16], [19,36], [40,28]], [[36,75], [76,55], [72,146]], [[142,110], [192,243], [459,401]]]
+        >>> detect_head = YOLOv4Detect(nc=80, anchors=anchors)
+        >>> x = [torch.randn(1, 255, 80, 80), torch.randn(1, 255, 40, 40), torch.randn(1, 255, 20, 20)]
+        >>> output = detect_head(x)
+    """
+    
+    def __init__(self, nc=80, ch=(), anchors=(), inplace=True):
+        """
+        Initialize YOLOv4 detection head.
+        
+        Args:
+            nc (int): Number of classes (default: 80 for COCO)
+            ch (tuple): Input channels for each detection layer  
+            anchors (tuple): Anchor configurations for each scale
+            inplace (bool): Whether to use inplace operations
+        """
+        super().__init__()
+        self.nc = nc  # number of classes
+        self.no = nc + 4  # number of outputs per anchor (classes + 4 bbox coords, compatible with modern loss)
+        self.nl = len(ch) if ch else 3  # number of detection layers
+        self.na = 3  # number of anchors per layer (default for YOLOv4)
+        
+        # Initialize grid and anchor_grid for each layer
+        self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
+        self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
+        
+        # Default YOLOv4 anchors if not provided
+        if not anchors:
+            anchors = [
+                [[12, 16], [19, 36], [40, 28]],   # P3/8 - small objects
+                [[36, 75], [76, 55], [72, 146]],  # P4/16 - medium objects  
+                [[142, 110], [192, 243], [459, 401]]  # P5/32 - large objects
+            ]
+        
+        # Handle case where ch is empty (called from YAML without channel info)
+        if not ch:
+            # Default channels for YOLOv4 (will be set properly during model building)
+            ch = [512, 512, 512]  # placeholder values
+            
+        # Register anchors
+        self.register_buffer('anchors', torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
+        
+        # Detection layers for each scale
+        # Each layer outputs na * (nc + 5) channels
+        self.m = nn.ModuleList(
+            nn.Conv2d(x, self.na * self.no, 1) for x in ch
+        )  # output conv layers
+        
+        self.inplace = inplace  # use inplace ops (e.g. slice assignment)
+        
+        # Stride will be calculated during first forward pass
+        self.stride = torch.tensor([8., 16., 32.])  # Default strides for P3, P4, P5
+        
+        # For compatibility with framework
+        self.reg_max = 16  # DFL register maximum (modern YOLO uses 16)
+        self.legacy = False  # Not legacy model
+        self.export = False  # Export mode flag
+        self.format = None  # Export format
+        self.dynamic = False  # Dynamic shape flag
+        
+    def forward(self, x):
+        """
+        Forward pass through YOLOv4 detection head.
+        
+        Args:
+            x (list): List of feature maps from different scales [P3, P4, P5]
+                     Each tensor has shape (batch, channels, height, width)
+                     
+        Returns:
+            list: During training returns list of predictions in format (batch, na, grid_h, grid_w, no)
+                 During inference returns processed predictions
+        """
+        # Store outputs for training and inference
+        outputs = []
+        
+        for i in range(self.nl):
+            # Apply detection layer
+            xi = self.m[i](x[i])  # conv output: (batch, na*no, height, width)
+            bs, _, ny, nx = xi.shape  # batch_size, _, grid_height, grid_width
+            
+            # Reshape: (batch, na*no, ny, nx) -> (batch, na, no, ny, nx) -> (batch, na, ny, nx, no)
+            xi = xi.view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            
+            if self.training:
+                outputs.append(xi)
+            else:
+                # Inference mode - decode predictions
+                if self.grid[i].shape[2:4] != xi.shape[2:4] or getattr(self, 'onnx_dynamic', False):
+                    self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
+                
+                # Split into bbox coordinates and class predictions
+                box, cls = xi.split((4, self.nc), 4)
+                
+                # Convert box coordinates (modern format for inference)
+                dbox = box.sigmoid() * 2 - 0.5  # xy offset
+                dbox[:, :, :, :, 2:] = (dbox[:, :, :, :, 2:] * 2) ** 2 * self.anchor_grid[i]  # wh
+                
+                # Apply grid offset to xy
+                dbox[:, :, :, :, :2] = (dbox[:, :, :, :, :2] + self.grid[i]) * self.stride[i]
+                
+                # Combine bbox and class predictions
+                y = torch.cat((dbox, cls.sigmoid()), 4)
+                outputs.append(y.view(bs, self.na * nx * ny, self.no))
+        
+        if self.training:
+            return outputs  # List of tensors: [(batch, na, grid_h, grid_w, no), ...]
+        else:
+            return (torch.cat(outputs, 1),) if self.export else (torch.cat(outputs, 1), outputs)
+        
+    def _make_grid(self, nx=20, ny=20, i=0, torch_1_10=True):
+        """
+        Create grid coordinates and anchor grid for the specified layer.
+        
+        Args:
+            nx (int): Grid width
+            ny (int): Grid height  
+            i (int): Layer index
+            torch_1_10 (bool): PyTorch version compatibility
+            
+        Returns:
+            tuple: Grid coordinates and anchor grid tensors
+        """
+        d = self.anchors[i].device
+        t = self.anchors[i].dtype
+        
+        # Create coordinate grids
+        shape = 1, self.na, ny, nx, 2  # grid shape
+        y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
+        
+        # Create meshgrid  
+        yv, xv = torch.meshgrid(y, x, indexing='ij') if torch_1_10 else torch.meshgrid(y, x)
+        
+        # Stack and expand to match output shape
+        grid = torch.stack((xv, yv), 2).expand(shape).float()
+        
+        # Anchor grid: expand anchors to match grid shape
+        anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape).float()
+        
+        return grid, anchor_grid
+        
+    @property
+    def onnx_dynamic(self):
+        """Returns True if model is in ONNX export mode with dynamic shapes."""
+        return hasattr(self, 'export') and self.export
