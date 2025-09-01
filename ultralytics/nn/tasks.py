@@ -1019,7 +1019,16 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             DSConv
         }:
             c1, c2 = ch[f], args[0]
-            if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
+            # Check if this is the output layer before YOLOv2Detect (skip make_divisible for YOLOv2)
+            is_yolov2_output = False
+            if i < len(d["backbone"] + d["head"]) - 1:  # not the last layer
+                next_layer = d["backbone"] + d["head"]
+                if i + 1 < len(next_layer):
+                    next_module = next_layer[i + 1][2]  # next module type
+                    if next_module == "YOLOv2Detect":
+                        is_yolov2_output = True
+            
+            if c2 != nc and not is_yolov2_output:  # if c2 not equal to number of classes (i.e. for Classify() output)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
             if m is C2fAttn:
                 args[1] = make_divisible(min(args[1], max_channels // 2) * width, 8)  # embed channels
@@ -1120,6 +1129,9 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         elif m is Reshape:
             # Reshape doesn't change channel count
             c2 = ch[f]
+        elif m is Passthrough:
+            # Passthrough multiplies channels by 4 (spatial to channel reorganization)
+            c2 = ch[f] * 4
         else:
             c2 = ch[f]
 

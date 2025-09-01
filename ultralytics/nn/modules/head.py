@@ -763,24 +763,24 @@ class YOLOv2Detect(nn.Module):
         
         Args:
             x (list): List containing detection feature map
-                     Expected shape: [batch, height, width, na*(5+nc)]
+                     Expected shape: [batch, channels, height, width]
                      
         Returns:
             torch.Tensor: Detection predictions
-                         Training: raw predictions
-                         Inference: processed predictions with bboxes and class probs
+                         Always returns raw predictions in (batch, height, width, channels) format
+                         for compatibility with YOLOv2Loss
         """
         if not isinstance(x, list):
             x = [x]
             
         pred = x[0]  # Get the prediction tensor
         
-        if self.training:
-            # During training, return raw predictions
-            return pred
-        else:
-            # During inference, process predictions
-            return self._decode_predictions(pred)
+        # Convert from (batch, channels, height, width) to (batch, height, width, channels)
+        # This is required for YOLOv2Loss which expects HWC format
+        pred = pred.permute(0, 2, 3, 1).contiguous()
+        
+        # Always return raw predictions in HWC format for YOLOv2Loss
+        return pred
     
     def _decode_predictions(self, pred):
         """
