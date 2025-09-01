@@ -15,7 +15,7 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOv1Detect"
+__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOv1Detect", "YOLOv2Detect"
 
 
 class Detect(nn.Module):
@@ -700,3 +700,135 @@ class YOLOv1Detect(nn.Module):
             output = torch.cat([box_predictions, class_predictions], dim=-1)
             
             return output
+
+# to realize yolov2
+class YOLOv2Detect(nn.Module):
+    """
+    YOLOv2 detection head for object detection.
+    
+    This detection head implements YOLOv2's approach using anchor boxes for object detection.
+    Unlike YOLOv1's grid-based approach, YOLOv2 uses predefined anchor boxes at each grid cell
+    to predict bounding boxes with better accuracy.
+    
+    Attributes:
+        nc (int): Number of classes.
+        anchors (list): List of anchor box dimensions.
+        na (int): Number of anchors per grid cell.
+        grid_size (int): Size of the detection grid.
+        stride (torch.Tensor): Stride tensor for compatibility.
+        nl (int): Number of detection layers.
+        
+    Methods:
+        forward: Forward pass through YOLOv2 detection head.
+        
+    Examples:
+        >>> anchors = [[1.3221, 1.73145], [3.19275, 4.00944], [5.05587, 8.09892]]
+        >>> detect_head = YOLOv2Detect(anchors=anchors, nc=80)
+        >>> x = torch.randn(1, 13, 13, 425)  # (batch, height, width, channels)
+        >>> output = detect_head([x])
+    """
+    
+    def __init__(self, anchors=None, nc=80):
+        """
+        Initialize YOLOv2 detection head.
+        
+        Args:
+            anchors (list, optional): List of anchor box dimensions [[w1,h1], [w2,h2], ...]
+                                     If None, default anchors will be used
+            nc (int): Number of classes (default: 80 for COCO)
+        """
+        super().__init__()
+        self.nc = nc  # number of classes
+        
+        # Default YOLOv2 anchors if not provided
+        if anchors is None:
+            anchors = [[1.3221, 1.73145], [3.19275, 4.00944], [5.05587, 8.09892], 
+                      [9.47112, 4.84053], [11.2364, 10.0071]]
+        
+        self.anchors = anchors  # anchor boxes
+        self.na = len(anchors)  # number of anchors
+        
+        # Convert anchors to tensor
+        self.register_buffer('anchor_grid', torch.tensor(anchors, dtype=torch.float32).view(1, self.na, 1, 1, 2))
+        
+        # For compatibility with the framework
+        self.stride = torch.tensor([32.0])  # YOLOv2 typically uses 32x downsampling
+        self.nl = 1  # number of detection layers
+        self.grid_size = 13  # typical YOLOv2 grid size for 416x416 input
+        self.reg_max = 1  # for compatibility with loss functions
+        
+    def forward(self, x):
+        """
+        Forward pass through YOLOv2 detection head.
+        
+        Args:
+            x (list): List containing detection feature map
+                     Expected shape: [batch, height, width, na*(5+nc)]
+                     
+        Returns:
+            torch.Tensor: Detection predictions
+                         Training: raw predictions
+                         Inference: processed predictions with bboxes and class probs
+        """
+        if not isinstance(x, list):
+            x = [x]
+            
+        pred = x[0]  # Get the prediction tensor
+        
+        if self.training:
+            # During training, return raw predictions
+            return pred
+        else:
+            # During inference, process predictions
+            return self._decode_predictions(pred)
+    
+    def _decode_predictions(self, pred):
+        """
+        Decode YOLOv2 predictions into bounding boxes and class probabilities.
+        
+        Args:
+            pred (torch.Tensor): Raw predictions of shape (batch, height, width, na*(5+nc))
+            
+        Returns:
+            torch.Tensor: Decoded predictions
+        """
+        batch_size, grid_h, grid_w, _ = pred.shape
+        
+        # Reshape predictions: (batch, grid_h, grid_w, na*(5+nc)) -> (batch, na, grid_h, grid_w, 5+nc)
+        pred = pred.view(batch_size, grid_h, grid_w, self.na, 5 + self.nc)
+        pred = pred.permute(0, 3, 1, 2, 4).contiguous()  # (batch, na, grid_h, grid_w, 5+nc)
+        
+        # Extract predictions
+        pred_xy = torch.sigmoid(pred[..., 0:2])  # Center coordinates (relative to grid cell)
+        pred_wh = pred[..., 2:4]  # Width and height (log space)
+        pred_conf = torch.sigmoid(pred[..., 4:5])  # Objectness confidence
+        pred_cls = torch.sigmoid(pred[..., 5:])  # Class probabilities
+        
+        # Create grid coordinates
+        device = pred.device
+        grid_x = torch.arange(grid_w, device=device, dtype=torch.float32).view(1, 1, 1, grid_w, 1)
+        grid_y = torch.arange(grid_h, device=device, dtype=torch.float32).view(1, 1, grid_h, 1, 1)
+        
+        # Decode bounding boxes
+        # Convert relative coordinates to absolute coordinates
+        pred_x = (pred_xy[..., 0:1] + grid_x) / grid_w
+        pred_y = (pred_xy[..., 1:2] + grid_y) / grid_h
+        
+        # Convert log width/height to actual width/height using anchors
+        anchor_w = self.anchor_grid[..., 0:1] / grid_w  # Normalize anchor width
+        anchor_h = self.anchor_grid[..., 1:2] / grid_h  # Normalize anchor height
+        pred_w = anchor_w * torch.exp(pred_wh[..., 0:1])
+        pred_h = anchor_h * torch.exp(pred_wh[..., 1:2])
+        
+        # Combine all predictions
+        pred_boxes = torch.cat([pred_x, pred_y, pred_w, pred_h], dim=-1)
+        
+        # Reshape for output: (batch, na*grid_h*grid_w, 4+1+nc)
+        pred_boxes = pred_boxes.view(batch_size, -1, 4)
+        pred_conf = pred_conf.view(batch_size, -1, 1)
+        pred_cls = pred_cls.view(batch_size, -1, self.nc)
+        
+        # Combine into final output
+        output = torch.cat([pred_boxes, pred_conf, pred_cls], dim=-1)
+        
+        return output

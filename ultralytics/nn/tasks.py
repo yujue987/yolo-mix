@@ -71,7 +71,9 @@ from ultralytics.nn.modules import (
     FullPAD_Tunnel,
     DSC3k2,
     Reshape,
-    YOLOv1Detect
+    Passthrough,  # YOLOv2
+    YOLOv1Detect,
+    YOLOv2Detect,
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -83,6 +85,7 @@ from ultralytics.utils.loss import (
     v8PoseLoss,
     v8SegmentationLoss,
     YOLOv1Loss,
+    YOLOv2Loss,
 )
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
@@ -397,6 +400,9 @@ class DetectionModel(BaseModel):
         m = self.model[-1]  # last layer
         if isinstance(m, YOLOv1Detect):
             return YOLOv1Loss(self)
+        #to realize yolov2
+        elif isinstance(m, YOLOv2Detect):
+            return YOLOv2Loss(self)
         return E2EDetectLoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
 
 
@@ -1075,6 +1081,10 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         elif m is YOLOv1Detect:
             # YOLOv1Detect doesn't need channel list, just use the nc parameter
             pass
+        #to realize yolov2
+        elif m is YOLOv2Detect:
+            # YOLOv2Detect needs anchors and nc parameters
+            pass
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])
         elif m in {CBLinear, TorchVision, Index}:
@@ -1210,7 +1220,7 @@ def guess_model_task(model):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect, v10Detect, YOLOv1Detect)):
+            elif isinstance(m, (Detect, WorldDetect, v10Detect, YOLOv1Detect, YOLOv2Detect)):
                 return "detect"
 
     # Guess from model filename

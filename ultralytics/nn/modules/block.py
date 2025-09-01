@@ -1948,3 +1948,60 @@ class Reshape(nn.Module):
         """Reshape input tensor to target shape."""
         batch_size = x.shape[0]
         return x.view(batch_size, *self.shape)
+
+# to realize yolov2
+# YOLOv2 Passthrough layer implementation
+class Passthrough(nn.Module):
+    """
+    Passthrough module for YOLOv2 feature reorganization.
+    
+    This module implements the passthrough layer used in YOLOv2 to reorganize
+    high-resolution feature maps to be concatenated with low-resolution semantic features.
+    It rearranges spatial information into channels by taking every 2x2 block and 
+    stacking them in the channel dimension.
+    
+    Methods:
+        forward: Reorganizes the input tensor by rearranging spatial information into channels.
+        
+    Examples:
+        >>> import torch
+        >>> passthrough = Passthrough()
+        >>> x = torch.randn(1, 256, 26, 26)  # High-res features from earlier layer
+        >>> output = passthrough(x)  # Output: (1, 1024, 13, 13)
+        >>> print(f"Input: {x.shape}, Output: {output.shape}")
+    """
+    
+    def __init__(self):
+        """Initialize the Passthrough module."""
+        super().__init__()
+    
+    def forward(self, x):
+        """
+        Reorganize feature map by rearranging spatial information into channels.
+        
+        Args:
+            x (torch.Tensor): Input feature map of shape (batch, channels, height, width)
+            
+        Returns:
+            torch.Tensor: Reorganized feature map with spatial info moved to channels
+                         Shape: (batch, channels*4, height//2, width//2)
+        """
+        batch_size, channels, height, width = x.shape
+        
+        # Ensure dimensions are even for proper reshaping
+        assert height % 2 == 0 and width % 2 == 0, \
+            f"Height ({height}) and width ({width}) must be even for passthrough operation"
+        
+        # Reshape to separate odd and even positions
+        # (batch, channels, height, width) -> (batch, channels, height//2, 2, width//2, 2)
+        x = x.view(batch_size, channels, height // 2, 2, width // 2, 2)
+        
+        # Permute to group the 2x2 spatial blocks
+        # (batch, channels, height//2, 2, width//2, 2) -> (batch, channels, 2, 2, height//2, width//2)
+        x = x.permute(0, 1, 3, 5, 2, 4).contiguous()
+        
+        # Reshape to stack the 2x2 blocks in the channel dimension
+        # (batch, channels, 2, 2, height//2, width//2) -> (batch, channels*4, height//2, width//2)
+        x = x.view(batch_size, channels * 4, height // 2, width // 2)
+        
+        return x

@@ -911,6 +911,176 @@ class YOLOv1Loss:
         loss_items = torch.tensor([coord_loss_detached, conf_loss_detached, noobj_loss_detached, class_loss_detached], device=device) / batch_size
         
         return total_loss, loss_items.detach()
+
+#to realize yolo2
+class YOLOv2Loss:
+    """
+    YOLOv2 loss function for object detection with anchor boxes.
+    
+    This loss function implements YOLOv2's approach using anchor boxes for object detection.
+    It computes coordinate loss, confidence loss, and class loss.
+    
+    Attributes:
+        nc (int): Number of classes.
+        na (int): Number of anchors.
+        anchors (torch.Tensor): Anchor boxes.
+        lambda_coord (float): Weight for coordinate loss.
+        lambda_noobj (float): Weight for no-object loss.
+        lambda_class (float): Weight for classification loss.
+    """
+    
+    def __init__(self, model):
+        """Initialize YOLOv2 loss with model."""
+        device = next(model.parameters()).device
+        h = model.args  # hyperparameters
+        m = model.model[-1]  # YOLOv2Detect() module
+        
+        self.device = device
+        self.hyp = h
+        self.nc = m.nc  # number of classes
+        self.na = m.na  # number of anchors
+        self.anchors = m.anchor_grid.clone()  # anchor boxes
+        
+        # Loss weights (YOLOv2 paper values)
+        self.lambda_coord = 5.0  # weight for coordinate loss
+        self.lambda_noobj = 0.5  # weight for no-object loss
+        self.lambda_class = 1.0  # weight for classification loss
+        
+        # Loss functions
+        self.mse = nn.MSELoss(reduction='sum')
+        self.bce = nn.BCEWithLogitsLoss(reduction='sum')
+        
+    def __call__(self, preds, batch):
+        """Calculate YOLOv2 loss."""
+        device = preds.device
+        
+        # Handle both list and tensor inputs
+        if isinstance(preds, list):
+            pred = preds[0]  # Take first (and only) prediction
+        else:
+            pred = preds
+            
+        batch_size, grid_h, grid_w, channels = pred.shape
+        
+        # Ground truth processing
+        gt_boxes = batch['bboxes']  # (batch_size, num_objects, 4) - normalized x1,y1,x2,y2 format
+        gt_cls = batch['cls']  # (batch_size, num_objects, 1)
+        
+        # Initialize target tensors
+        target_boxes = torch.zeros(batch_size, self.na, grid_h, grid_w, 4, device=device)
+        target_conf = torch.zeros(batch_size, self.na, grid_h, grid_w, device=device)
+        target_cls = torch.zeros(batch_size, self.na, grid_h, grid_w, self.nc, device=device)
+        object_mask = torch.zeros(batch_size, self.na, grid_h, grid_w, device=device)
+        
+        # Reshape predictions: (batch, grid_h, grid_w, na*(5+nc)) -> (batch, na, grid_h, grid_w, 5+nc)
+        pred = pred.view(batch_size, grid_h, grid_w, self.na, 5 + self.nc)
+        pred = pred.permute(0, 3, 1, 2, 4).contiguous()  # (batch, na, grid_h, grid_w, 5+nc)
+        
+        # Extract prediction components
+        pred_xy = pred[..., 0:2]  # Center coordinates (before sigmoid)
+        pred_wh = pred[..., 2:4]  # Width and height (before exp)
+        pred_conf = pred[..., 4]  # Objectness confidence (before sigmoid)
+        pred_cls = pred[..., 5:]  # Class probabilities (before sigmoid)
+        
+        # Process ground truth for each image in batch
+        for b in range(batch_size):
+            valid_mask = gt_cls[b].squeeze(-1) >= 0  # Valid targets
+            if not valid_mask.any():
+                continue
+                
+            valid_boxes = gt_boxes[b][valid_mask]  # (num_valid, 4)
+            valid_cls = gt_cls[b][valid_mask].long()  # (num_valid, 1)
+            
+            for box, cls in zip(valid_boxes, valid_cls):
+                cls = cls.item()
+                if cls < 0 or cls >= self.nc:
+                    continue
+                    
+                # Convert from x1,y1,x2,y2 to center_x,center_y,w,h (all normalized)
+                x1, y1, x2, y2 = box
+                center_x = (x1 + x2) / 2.0
+                center_y = (y1 + y2) / 2.0
+                width = x2 - x1
+                height = y2 - y1
+                
+                # Get grid cell indices
+                grid_x = int(center_x * grid_w)
+                grid_y = int(center_y * grid_h)
+                grid_x = min(max(grid_x, 0), grid_w - 1)
+                grid_y = min(max(grid_y, 0), grid_h - 1)
+                
+                # Find best anchor by IoU
+                gt_box = torch.tensor([width, height], device=device)
+                anchor_ious = []
+                for anchor_idx in range(self.na):
+                    anchor_w = self.anchors[0, anchor_idx, 0, 0, 0] / grid_w
+                    anchor_h = self.anchors[0, anchor_idx, 0, 0, 1] / grid_h
+                    anchor_box = torch.tensor([anchor_w, anchor_h], device=device)
+                    
+                    # Compute IoU (treating as centered boxes)
+                    intersection = torch.min(gt_box, anchor_box).prod()
+                    union = gt_box.prod() + anchor_box.prod() - intersection
+                    iou = intersection / (union + 1e-16)
+                    anchor_ious.append(iou)
+                
+                best_anchor = torch.tensor(anchor_ious).argmax().item()
+                
+                # Set target values for best anchor
+                # Relative position within grid cell
+                rel_x = center_x * grid_w - grid_x
+                rel_y = center_y * grid_h - grid_y
+                
+                # Width and height relative to anchor
+                anchor_w = self.anchors[0, best_anchor, 0, 0, 0] / grid_w
+                anchor_h = self.anchors[0, best_anchor, 0, 0, 1] / grid_h
+                rel_w = torch.log(width / (anchor_w + 1e-16))
+                rel_h = torch.log(height / (anchor_h + 1e-16))
+                
+                # Set targets
+                target_boxes[b, best_anchor, grid_y, grid_x, 0] = rel_x
+                target_boxes[b, best_anchor, grid_y, grid_x, 1] = rel_y
+                target_boxes[b, best_anchor, grid_y, grid_x, 2] = rel_w
+                target_boxes[b, best_anchor, grid_y, grid_x, 3] = rel_h
+                target_conf[b, best_anchor, grid_y, grid_x] = 1.0
+                target_cls[b, best_anchor, grid_y, grid_x, cls] = 1.0
+                object_mask[b, best_anchor, grid_y, grid_x] = 1.0
+        
+        # Calculate losses
+        # 1. Coordinate loss (only for objects)
+        coord_loss = self.lambda_coord * (
+            object_mask * ((torch.sigmoid(pred_xy[..., 0]) - target_boxes[..., 0]) ** 2 +
+                          (torch.sigmoid(pred_xy[..., 1]) - target_boxes[..., 1]) ** 2 +
+                          (pred_wh[..., 0] - target_boxes[..., 2]) ** 2 +
+                          (pred_wh[..., 1] - target_boxes[..., 3]) ** 2)
+        ).sum()
+        
+        # 2. Confidence loss
+        # Object confidence loss (objects present)
+        obj_conf_loss = (object_mask * (torch.sigmoid(pred_conf) - target_conf) ** 2).sum()
+        
+        # No-object confidence loss (no objects present)
+        noobj_mask = 1.0 - object_mask
+        noobj_conf_loss = self.lambda_noobj * (noobj_mask * (torch.sigmoid(pred_conf) - 0) ** 2).sum()
+        
+        conf_loss = obj_conf_loss + noobj_conf_loss
+        
+        # 3. Classification loss (only for objects)
+        class_loss = self.lambda_class * (
+            object_mask.unsqueeze(-1) * (torch.sigmoid(pred_cls) - target_cls) ** 2
+        ).sum()
+        
+        # Total loss
+        total_loss = coord_loss + conf_loss + class_loss
+        
+        # Create loss items tensor for logging
+        loss_items = torch.tensor([
+            coord_loss.detach() if isinstance(coord_loss, torch.Tensor) else torch.tensor(coord_loss),
+            conf_loss.detach() if isinstance(conf_loss, torch.Tensor) else torch.tensor(conf_loss),
+            class_loss.detach() if isinstance(class_loss, torch.Tensor) else torch.tensor(class_loss),
+            total_loss.detach() if isinstance(total_loss, torch.Tensor) else torch.tensor(total_loss)
+        ], device=device)
+        
+        return total_loss, loss_items.detach()
     
     def calculate_iou(self, box1, box2):
         """Calculate IoU between two boxes in xywh format."""
