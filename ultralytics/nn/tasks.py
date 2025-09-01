@@ -76,6 +76,11 @@ from ultralytics.nn.modules import (
     YOLOv2Detect,
     CSPBlock,  # YOLOv4
     YOLOv4Detect,  # YOLOv4
+    ELAN,  # YOLOv7
+    MPConv,  # YOLOv7
+    SPPCSPC,  # YOLOv7
+    YOLOv7Detect,  # YOLOv7
+    YOLOv7AuxDetect,  # YOLOv7
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -89,6 +94,7 @@ from ultralytics.utils.loss import (
     YOLOv1Loss,
     YOLOv2Loss,
     YOLOv4Loss,
+    YOLOv7Loss,
 )
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
@@ -409,6 +415,9 @@ class DetectionModel(BaseModel):
         #to realize yolov4
         elif isinstance(m, YOLOv4Detect):
             return YOLOv4Loss(self)  # 使用专用的YOLOv4损失函数
+        #to realize yolov7
+        elif isinstance(m, (YOLOv7Detect, YOLOv7AuxDetect)):
+            return YOLOv7Loss(self)  # 使用专用的YOLOv7损失函数
         return E2EDetectLoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
 
 
@@ -1023,7 +1032,9 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             A2C2f,
             DSC3k2,
             DSConv,
-            CSPBlock  # YOLOv4
+            CSPBlock,  # YOLOv4
+            ELAN,  # YOLOv7
+            SPPCSPC,  # YOLOv7
         }:
             c1, c2 = ch[f], args[0]
             # Check if this is the output layer before YOLOv2Detect (skip make_divisible for YOLOv2)
@@ -1061,7 +1072,7 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 C2PSA,
                 A2C2f,
                 DSC3k2,
-                CSPBlock  # YOLOv4
+                CSPBlock,  # YOLOv4
             }:
                 args.insert(2, n)  # number of repeats
                 n = 1
@@ -1088,11 +1099,11 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
-        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect, YOLOv4Detect}:
+        elif m in {Detect, WorldDetect, Segment, Pose, OBB, ImagePoolingAttn, v10Detect, YOLOv4Detect, YOLOv7Detect, YOLOv7AuxDetect}:
             args.append([ch[x] for x in f])
             if m is Segment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, Segment, Pose, OBB, YOLOv4Detect}:
+            if m in {Detect, Segment, Pose, OBB, YOLOv4Detect, YOLOv7Detect, YOLOv7AuxDetect}:
                 m.legacy = legacy
         #to realize yolov1
         elif m is YOLOv1Detect:
@@ -1140,6 +1151,9 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
         elif m is Passthrough:
             # Passthrough multiplies channels by 4 (spatial to channel reorganization)
             c2 = ch[f] * 4
+        elif m is MPConv:
+            # MPConv: x1 (max_pooled) + x2 (conv with 2x channels) = c_in + c_in*2 = c_in*3
+            c2 = ch[f] * 3
         else:
             c2 = ch[f]
 

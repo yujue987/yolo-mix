@@ -15,7 +15,7 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOv1Detect", "YOLOv2Detect", "YOLOv4Detect"
+__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOv1Detect", "YOLOv2Detect", "YOLOv4Detect", "YOLOv7Detect", "YOLOv7AuxDetect"
 
 
 class Detect(nn.Module):
@@ -1007,3 +1007,261 @@ class YOLOv4Detect(nn.Module):
     def onnx_dynamic(self):
         """Returns True if model is in ONNX export mode with dynamic shapes."""
         return hasattr(self, 'export') and self.export
+
+#to realize yolov7
+# YOLOv7 Detection Heads
+class YOLOv7Detect(nn.Module):
+    """
+    YOLOv7 detection head for multi-scale object detection.
+    
+    This detection head implements YOLOv7's approach with anchor-based detection at multiple scales.
+    It supports both main detection and auxiliary detection for improved training.
+    
+    YOLOv7 features:
+    - Efficient architecture with re-parameterized convolutions
+    - Extended ELAN (E-ELAN) for better gradient flow
+    - Compound scaling for different model variants
+    - Auxiliary head for training improvements
+    
+    Attributes:
+        nc (int): Number of classes.
+        anchors (torch.Tensor): Anchor boxes for all scales.
+        na (int): Number of anchors per scale.
+        nl (int): Number of detection layers (3 for P3, P4, P5).
+        grid (list): Grid coordinates for each scale.
+        anchor_grid (torch.Tensor): Anchor grids for each scale.
+        stride (torch.Tensor): Stride for each detection layer.
+        
+    Methods:
+        forward: Forward pass through YOLOv7 detection head.
+        _make_grid: Create grid coordinates for a given scale.
+        
+    Examples:
+        >>> anchors = [[[12,16], [19,36], [40,28]], [[36,75], [76,55], [72,146]], [[142,110], [192,243], [459,401]]]
+        >>> detect_head = YOLOv7Detect(nc=80, anchors=anchors)
+        >>> x = [torch.randn(1, 255, 80, 80), torch.randn(1, 255, 40, 40), torch.randn(1, 255, 20, 20)]
+        >>> output = detect_head(x)
+    """
+    
+    def __init__(self, nc=80, anchors=(), ch=(), inplace=True):
+        """
+        Initialize YOLOv7 detection head.
+        
+        Args:
+            nc (int): Number of classes (default: 80 for COCO)
+            anchors (tuple): Anchor configurations for each scale
+            ch (tuple): Input channels for each detection layer  
+            inplace (bool): Whether to use inplace operations
+        """
+        super().__init__()
+        self.nc = nc  # number of classes
+        self.no = nc + 5  # number of outputs per anchor (classes + 5 bbox params)
+        
+        # Handle different argument orders from parser
+        if isinstance(anchors, list) and len(anchors) > 0 and isinstance(anchors[0], int):
+            # If anchors is actually channel list from parser
+            ch = anchors
+            anchors = ()
+        elif isinstance(anchors, str):
+            # If anchors is a string reference from YAML, ignore it and use defaults
+            anchors = ()
+        
+        self.nl = len(ch) if ch else 1  # number of detection layers
+        self.na = 3  # number of anchors per layer
+        
+        # Initialize grid and anchor_grid for each layer
+        self.grid = [torch.empty(0) for _ in range(self.nl)]  # init grid
+        self.anchor_grid = [torch.empty(0) for _ in range(self.nl)]  # init anchor grid
+        
+        # Default YOLOv7 anchors if not provided
+        if not anchors:
+            anchors = [
+                [[12, 16], [19, 36], [40, 28]],   # P3/8 - small objects
+                [[36, 75], [76, 55], [72, 146]],  # P4/16 - medium objects  
+                [[142, 110], [192, 243], [459, 401]]  # P5/32 - large objects
+            ]
+        
+        # Handle case where ch is empty (called from YAML without channel info)
+        if not ch:
+            ch = [512, 512, 512]  # placeholder values
+            
+        # Register anchors - ensure we only use the layers we have channels for
+        if len(anchors) > self.nl:
+            anchors = anchors[:self.nl]
+        elif len(anchors) < self.nl:
+            # Repeat the last anchor configuration for missing layers
+            while len(anchors) < self.nl:
+                anchors.append(anchors[-1])
+                
+        self.register_buffer('anchors', torch.tensor(anchors).float().view(self.nl, -1, 2))  # shape(nl,na,2)
+        
+        # Detection layers for each scale
+        self.m = nn.ModuleList(
+            nn.Conv2d(x, self.na * self.no, 1) for x in ch
+        )  # output conv layers
+        
+        self.inplace = inplace  # use inplace ops (e.g. slice assignment)
+        
+        # Stride will be calculated during first forward pass
+        self.stride = torch.tensor([8., 16., 32.])  # Default strides for P3, P4, P5
+        
+        # For compatibility with framework
+        self.reg_max = 16  # DFL register maximum
+        self.legacy = False  # Not legacy model
+        self.export = False  # Export mode flag
+        self.format = None  # Export format
+        self.dynamic = False  # Dynamic shape flag
+        
+    def forward(self, x):
+        """
+        Forward pass through YOLOv7 detection head.
+        
+        Args:
+            x (list): List of feature maps from different scales [P3, P4, P5]
+                     Each tensor has shape (batch, channels, height, width)
+                     
+        Returns:
+            list: During training returns list of predictions in format (batch, na, grid_h, grid_w, no)
+                 During inference returns processed predictions
+        """
+        outputs = []
+        
+        for i in range(self.nl):
+            # Apply detection layer
+            xi = self.m[i](x[i])  # conv output: (batch, na*no, height, width)
+            bs, _, ny, nx = xi.shape  # batch_size, _, grid_height, grid_width
+            
+            # Reshape: (batch, na*no, ny, nx) -> (batch, na, no, ny, nx) -> (batch, na, ny, nx, no)
+            xi = xi.view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            
+            if self.training:
+                outputs.append(xi)
+            else:
+                # Inference mode - decode predictions
+                if self.grid[i].shape[2:4] != xi.shape[2:4] or getattr(self, 'onnx_dynamic', False):
+                    self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
+                
+                # Decode predictions
+                xy, wh, conf, cls = xi.split((2, 2, 1, self.nc), 4)
+                
+                # Apply sigmoid and decode
+                xy = (xy.sigmoid() * 2 - 0.5 + self.grid[i]) * self.stride[i]  # xy
+                wh = (wh.sigmoid() * 2) ** 2 * self.anchor_grid[i]  # wh
+                
+                # Combine predictions
+                y = torch.cat((xy, wh, conf.sigmoid(), cls.sigmoid()), 4)
+                outputs.append(y.view(bs, self.na * nx * ny, self.no))
+        
+        if self.training:
+            return outputs  # List of tensors: [(batch, na, grid_h, grid_w, no), ...]
+        else:
+            return (torch.cat(outputs, 1),) if self.export else (torch.cat(outputs, 1), outputs)
+        
+    def _make_grid(self, nx=20, ny=20, i=0, torch_1_10=True):
+        """
+        Create grid coordinates and anchor grid for the specified layer.
+        
+        Args:
+            nx (int): Grid width
+            ny (int): Grid height  
+            i (int): Layer index
+            torch_1_10 (bool): PyTorch version compatibility
+            
+        Returns:
+            tuple: Grid coordinates and anchor grid tensors
+        """
+        d = self.anchors[i].device
+        t = self.anchors[i].dtype
+        
+        # Create coordinate grids
+        shape = 1, self.na, ny, nx, 2  # grid shape
+        y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
+        
+        # Create meshgrid  
+        yv, xv = torch.meshgrid(y, x, indexing='ij') if torch_1_10 else torch.meshgrid(y, x)
+        
+        # Stack and expand to match output shape
+        grid = torch.stack((xv, yv), 2).expand(shape).float()
+        
+        # Anchor grid: expand anchors to match grid shape
+        anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape).float()
+        
+        return grid, anchor_grid
+        
+    @property
+    def onnx_dynamic(self):
+        """Returns True if model is in ONNX export mode with dynamic shapes."""
+        return hasattr(self, 'export') and self.export
+
+
+class YOLOv7AuxDetect(YOLOv7Detect):
+    """
+    YOLOv7 auxiliary detection head for training enhancement.
+    
+    This auxiliary head is used during training to provide additional supervision
+    and improve the learning process. It shares the same architecture as the main
+    YOLOv7Detect head but is only active during training.
+    
+    The auxiliary head helps with:
+    - Better gradient flow during training
+    - Improved convergence and stability
+    - Enhanced feature learning at multiple scales
+    
+    Attributes:
+        Inherits all attributes from YOLOv7Detect.
+        
+    Methods:
+        forward: Forward pass through auxiliary detection head (training only).
+        
+    Examples:
+        >>> aux_head = YOLOv7AuxDetect(nc=80, ch=(256, 512, 1024))
+        >>> x = [torch.randn(1, 256, 80, 80), torch.randn(1, 512, 40, 40), torch.randn(1, 1024, 20, 20)]
+        >>> if model.training:
+        ...     aux_output = aux_head(x)
+    """
+    
+    def __init__(self, nc=80, ch=(), anchors=(), inplace=True):
+        """
+        Initialize YOLOv7 auxiliary detection head.
+        
+        Args:
+            nc (int): Number of classes (default: 80 for COCO)
+            ch (tuple): Input channels for each detection layer  
+            anchors (tuple): Anchor configurations for each scale
+            inplace (bool): Whether to use inplace operations
+        """
+        super().__init__(nc, ch, anchors, inplace)
+        
+        # Auxiliary head is mainly used during training
+        self.aux_training = True
+        
+    def forward(self, x):
+        """
+        Forward pass through auxiliary detection head.
+        
+        The auxiliary head only operates during training and returns raw predictions
+        without inference post-processing.
+        
+        Args:
+            x (list): List of feature maps from different scales [P3, P4, P5]
+                     Each tensor has shape (batch, channels, height, width)
+                     
+        Returns:
+            list: During training returns list of raw predictions for auxiliary loss
+                 During inference returns None (auxiliary head is disabled)
+        """
+        if not self.training:
+            return None  # Auxiliary head is only active during training
+            
+        outputs = []
+        
+        for i in range(self.nl):
+            # Apply detection layer
+            xi = self.m[i](x[i])  # conv output: (batch, na*no, height, width)
+            bs, _, ny, nx = xi.shape  # batch_size, _, grid_height, grid_width
+            
+            # Reshape: (batch, na*no, ny, nx) -> (batch, na, no, ny, nx) -> (batch, na, ny, nx, no)
+            xi = xi.view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+            outputs.append(xi)
+        
+        return outputs  # Return raw predictions for auxiliary loss calculation

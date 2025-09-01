@@ -54,7 +54,10 @@ __all__ = (
     "DownsampleConv", 
     "FullPAD_Tunnel",
     "DSC3k2",
-    "Reshape"
+    "Reshape",
+    "ELAN",
+    "MPConv",
+    "SPPCSPC"
 )
 
 
@@ -2075,3 +2078,219 @@ class CSPBlock(nn.Module):
 
 # For backward compatibility and alternative usage
 CSPDarknetBlock = CSPBlock  # Alias for CSPBlock
+
+#to realize yolov7
+# YOLOv7 Modules
+class ELAN(nn.Module):
+    """
+    ELAN (Efficient Layer Aggregation Network) module for YOLOv7.
+    
+    This module implements the ELAN block used in YOLOv7, which is designed to
+    control the shortest and longest gradient paths. It uses efficient layer aggregation
+    to enhance the learning ability of the network.
+    
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels.
+        c3 (int): Number of intermediate channels (default: c2).
+        n (int): Number of bottleneck layers (default: 1).
+        
+    Attributes:
+        cv1 (Conv): Initial convolution layer.
+        cv2 (Conv): First branch convolution.
+        cv3 (Conv): Second branch convolution.
+        cv4 (Conv): Output convolution layer.
+        m (nn.Sequential): Sequential bottleneck layers.
+        
+    Methods:
+        forward: Forward pass through the ELAN module.
+        
+    Examples:
+        >>> elan = ELAN(c1=256, c2=128, c3=64)
+        >>> x = torch.randn(1, 256, 52, 52)
+        >>> output = elan(x)  # Output: (1, 128, 52, 52)
+    """
+    
+    def __init__(self, c1, c2, c3=None, n=1, *args):
+        """Initialize ELAN module with specified channels and bottleneck layers."""
+        super().__init__()
+        if c3 is None:
+            c3 = c2 // 2
+        
+        # Main convolution layers
+        self.cv1 = Conv(c1, c3, 1, 1)  # Initial conv
+        self.cv2 = Conv(c3, c3, 3, 1)  # First branch
+        self.cv3 = Conv(c3, c3, 3, 1)  # Second branch
+        self.cv4 = Conv(c3 * 4, c2, 1, 1)  # Output conv
+        
+        # Bottleneck layers for feature processing
+        self.m = nn.Sequential(
+            *(Bottleneck(c3, c3, shortcut=True, g=1, k=(3, 3), e=1.0) for _ in range(n))
+        )
+    
+    def forward(self, x):
+        """
+        Forward pass through ELAN module.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch, c1, height, width)
+            
+        Returns:
+            torch.Tensor: Output tensor of shape (batch, c2, height, width)
+        """
+        # Initial convolution
+        x1 = self.cv1(x)
+        
+        # First branch
+        x2 = self.cv2(x1)
+        
+        # Second branch with bottleneck processing
+        x3 = self.cv3(x1)
+        x3 = self.m(x3)
+        
+        # Concatenate all features and apply output convolution
+        return self.cv4(torch.cat([x1, x2, x3, x1], 1))
+
+
+class MPConv(nn.Module):
+    """
+    MP (Max Pooling) Convolution module for YOLOv7.
+    
+    This module combines max pooling with convolution operations for efficient downsampling
+    while preserving important features. It's commonly used in YOLOv7's backbone for
+    spatial dimension reduction.
+    
+    Attributes:
+        mp (nn.MaxPool2d): Max pooling layer for downsampling.
+        cv1 (Conv): First convolution branch.
+        cv2 (Conv): Second convolution branch after max pooling.
+        
+    Methods:
+        forward: Forward pass through the MPConv module.
+        
+    Examples:
+        >>> mpconv = MPConv()
+        >>> x = torch.randn(1, 256, 52, 52)
+        >>> output = mpconv(x)  # Output: (1, 512, 26, 26)
+    """
+    
+    def __init__(self, *args):
+        """Initialize MPConv module with max pooling and convolution layers."""
+        super().__init__()
+        
+        # Max pooling for spatial downsampling
+        self.mp = nn.MaxPool2d(kernel_size=2, stride=2)
+        
+    def forward(self, x):
+        """
+        Forward pass through MPConv module.
+        
+        The module automatically determines the output channels based on input channels
+        and performs downsampling with channel expansion.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch, c_in, height, width)
+            
+        Returns:
+            torch.Tensor: Output tensor of shape (batch, c_out, height//2, width//2)
+                         where c_out = c_in * 2
+        """
+        c_in = x.shape[1]
+        c_out = c_in * 2
+        
+        # Create convolution layers dynamically based on input channels
+        if not hasattr(self, 'cv1'):
+            self.cv1 = Conv(c_in, c_in // 2, 1, 1).to(x.device)
+            self.cv2 = Conv(c_in // 2, c_out, 3, 2).to(x.device)
+        
+        # Branch 1: Direct max pooling
+        x1 = self.mp(x)
+        
+        # Branch 2: Convolution with stride 2
+        x2 = self.cv2(self.cv1(x))
+        
+        # Concatenate both branches
+        return torch.cat([x1, x2], 1)
+
+
+class SPPCSPC(nn.Module):
+    """
+    SPPCSPC (Spatial Pyramid Pooling with CSP Connection) module for YOLOv7.
+    
+    This module combines Spatial Pyramid Pooling (SPP) with Cross Stage Partial (CSP)
+    connections to enhance feature extraction at multiple scales while maintaining
+    efficient computation.
+    
+    Args:
+        c1 (int): Number of input channels.
+        c2 (int): Number of output channels (default: same as input).
+        k (tuple): Kernel sizes for max pooling layers (default: (5, 9, 13)).
+        
+    Attributes:
+        c_ (int): Hidden channel dimension (c1 // 2).
+        cv1 (Conv): Initial convolution.
+        cv2 (Conv): First branch convolution.
+        cv3 (Conv): Second branch convolution.
+        cv4 (Conv): Third branch convolution.
+        m (nn.ModuleList): Max pooling layers with different kernel sizes.
+        cv5 (Conv): Final output convolution.
+        
+    Methods:
+        forward: Forward pass through the SPPCSPC module.
+        
+    Examples:
+        >>> sppcspc = SPPCSPC(c1=512, c2=256)
+        >>> x = torch.randn(1, 512, 26, 26)
+        >>> output = sppcspc(x)  # Output: (1, 256, 26, 26)
+    """
+    
+    def __init__(self, c1, c2=None, k=(5, 9, 13), *args):
+        """Initialize SPPCSPC module with specified channels and pooling kernel sizes."""
+        super().__init__()
+        
+        if c2 is None:
+            c2 = c1
+            
+        self.c_ = c1 // 2  # hidden channels
+        
+        # CSP convolution layers
+        self.cv1 = Conv(c1, self.c_, 1, 1)
+        self.cv2 = Conv(c1, self.c_, 1, 1)
+        self.cv3 = Conv(self.c_, self.c_, 3, 1)
+        self.cv4 = Conv(self.c_, self.c_, 1, 1)
+        
+        # SPP max pooling layers
+        self.m = nn.ModuleList([
+            nn.MaxPool2d(kernel_size=x, stride=1, padding=x // 2) for x in k
+        ])
+        
+        # Final output convolution
+        self.cv5 = Conv(self.c_ * (len(k) + 1), self.c_, 1, 1)
+        self.cv6 = Conv(self.c_, self.c_, 3, 1)
+        self.cv7 = Conv(self.c_ * 2, c2, 1, 1)
+    
+    def forward(self, x):
+        """
+        Forward pass through SPPCSPC module.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch, c1, height, width)
+            
+        Returns:
+            torch.Tensor: Output tensor of shape (batch, c2, height, width)
+        """
+        # CSP branch 1
+        x1 = self.cv1(x)
+        
+        # CSP branch 2 with SPP
+        x2 = self.cv2(x)
+        x2 = self.cv3(x2)
+        x2 = self.cv4(x2)
+        
+        # Apply SPP (Spatial Pyramid Pooling)
+        spp_features = [x2] + [m(x2) for m in self.m]
+        x2 = self.cv5(torch.cat(spp_features, 1))
+        x2 = self.cv6(x2)
+        
+        # Combine CSP branches
+        return self.cv7(torch.cat([x1, x2], 1))

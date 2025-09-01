@@ -55,10 +55,5 @@ neck:
 
 # 检测头 (Head)
 head:
-  # 主检测头
-  - [[19, 22, 25], 1, RepConv, []]  # 重参数化卷积
-  - [[-3, -2, -1], 1, YOLOv7Detect, [nc, anchors]]   # 检测层
-
-  # 辅助检测头 (仅训练时使用)
-  - [[19, 22, 25], 1, RepConv, []]  # 重参数化卷积
-  - [[-3, -2, -1], 1, YOLOv7AuxDetect, [nc, anchors]]   # 辅助检测层
+  # 主检测头  
+  - [[-1], 1, YOLOv7Detect, [nc, anchors]]   # 检测层
