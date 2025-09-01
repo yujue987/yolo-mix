@@ -53,7 +53,8 @@ __all__ = (
     "HyperACE", 
     "DownsampleConv", 
     "FullPAD_Tunnel",
-    "DSC3k2"
+    "DSC3k2",
+    "Reshape"
 )
 
 
@@ -1914,3 +1915,36 @@ class FullPAD_Tunnel(nn.Module):
     def forward(self, x):
         out = x[0] + self.gate * x[1]
         return out
+
+# to realize yolov1
+class Reshape(nn.Module):
+    """
+    Reshape module for tensor reshaping operations.
+    
+    This module reshapes the input tensor to the specified target shape. It's commonly used
+    in YOLO architectures to reshape feature maps before detection heads.
+    
+    Attributes:
+        shape (tuple): Target shape for reshaping (excluding batch dimension).
+        
+    Methods:
+        forward: Reshapes the input tensor to the target shape.
+        
+    Examples:
+        >>> import torch
+        >>> reshape = Reshape(7, 7, 30)
+        >>> x = torch.randn(2, 1470)  # batch_size=2, features=1470
+        >>> output = reshape(x)
+        >>> print(output.shape)
+        torch.Size([2, 7, 7, 30])
+    """
+    
+    def __init__(self, *args):
+        """Initialize the Reshape module with target shape dimensions."""
+        super().__init__()
+        self.shape = args
+        
+    def forward(self, x):
+        """Reshape input tensor to target shape."""
+        batch_size = x.shape[0]
+        return x.view(batch_size, *self.shape)

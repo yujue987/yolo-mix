@@ -15,7 +15,7 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect"
+__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOv1Detect"
 
 
 class Detect(nn.Module):
@@ -623,3 +623,80 @@ class v10Detect(Detect):
             for x in ch
         )
         self.one2one_cv3 = copy.deepcopy(self.cv3)
+
+# to realize yolov1
+class YOLOv1Detect(nn.Module):
+    """
+    YOLOv1 detection head for the original YOLO architecture.
+    
+    This detection head implements the original YOLOv1 approach where the network
+    predicts B bounding boxes and class probabilities for each grid cell.
+    The output tensor has shape [batch_size, S, S, B*5 + C] where:
+    - S is the grid size (7x7 in original YOLO)
+    - B is the number of bounding boxes per cell (2 in original YOLO)
+    - C is the number of classes
+    - Each bounding box prediction contains [x, y, w, h, confidence]
+    
+    Attributes:
+        nc (int): Number of classes.
+        grid_size (int): Grid size (S in the original paper).
+        num_boxes (int): Number of bounding boxes per grid cell (B in the original paper).
+        
+    Methods:
+        forward: Processes the input through YOLOv1 detection.
+        
+    Examples:
+        >>> detect = YOLOv1Detect(nc=20)
+        >>> x = torch.randn(2, 7, 7, 30)  # batch_size=2, 7x7 grid, 30 channels
+        >>> output = detect(x)
+        >>> print(output.shape)
+        torch.Size([2, 7, 7, 30])
+    """
+    
+    def __init__(self, nc=80):
+        """Initialize YOLOv1 detection head with number of classes."""
+        super().__init__()
+        self.nc = nc  # number of classes
+        self.grid_size = 7  # 7x7 grid
+        self.num_boxes = 2  # 2 bounding boxes per cell
+        
+        # Add attributes for compatibility with loss function
+        self.stride = torch.tensor([32.0])  # YOLOv1 uses single scale with 32x downsample
+        self.reg_max = 1  # YOLOv1 doesn't use DFL, set to 1 for compatibility
+        self.nl = 1  # number of detection layers (YOLOv1 has only one)
+        
+        # Expected input channels: grid_size * grid_size * (num_boxes * 5 + nc)
+        # For PASCAL VOC (nc=20): 7*7*(2*5+20) = 7*7*30 = 1470
+        self.expected_features = self.grid_size * self.grid_size * (self.num_boxes * 5 + self.nc)
+        
+    def forward(self, x):
+        """Forward pass through YOLOv1 detection head."""
+        # x should have shape [batch_size, S, S, B*5 + C]
+        # where S=7, B=2, C=nc
+        
+        if self.training:
+            # During training, return raw predictions
+            return x
+        else:
+            # During inference, apply sigmoid to confidence scores
+            # and softmax to class probabilities
+            batch_size, S, S, features = x.shape
+            
+            # Reshape to separate box predictions and class predictions
+            # Box predictions: [batch_size, S, S, B*5]
+            # Class predictions: [batch_size, S, S, C]
+            box_predictions = x[..., :self.num_boxes * 5]
+            class_predictions = x[..., self.num_boxes * 5:]
+            
+            # Apply sigmoid to confidence scores (every 5th element starting from index 4)
+            box_predictions = box_predictions.view(batch_size, S, S, self.num_boxes, 5)
+            box_predictions[..., 4] = torch.sigmoid(box_predictions[..., 4])  # confidence
+            box_predictions = box_predictions.view(batch_size, S, S, self.num_boxes * 5)
+            
+            # Apply softmax to class probabilities
+            class_predictions = torch.softmax(class_predictions, dim=-1)
+            
+            # Recombine predictions
+            output = torch.cat([box_predictions, class_predictions], dim=-1)
+            
+            return output

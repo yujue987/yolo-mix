@@ -61,7 +61,8 @@ from .block import (
     HyperACE,
     DownsampleConv,
     FullPAD_Tunnel,
-    DSC3k2
+    DSC3k2,
+    Reshape
 )
 from .conv import (
     CBAM,
@@ -80,7 +81,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
-from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect
+from .head import OBB, Classify, Detect, Pose, RTDETRDecoder, Segment, WorldDetect, v10Detect, YOLOv1Detect
 from .transformer import (
     AIFI,
     MLP,
@@ -149,6 +150,7 @@ __all__ = (
     "OBB",
     "WorldDetect",
     "v10Detect",
+    "YOLOv1Detect",
     "ImagePoolingAttn",
     "ContrastiveHead",
     "BNContrastiveHead",
@@ -171,5 +173,6 @@ __all__ = (
     "DownsampleConv",
     "FullPAD_Tunnel",
     "DSC3k2",
-    "DSConv"
+    "DSConv",
+    "Reshape"
 )

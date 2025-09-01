@@ -69,7 +69,9 @@ from ultralytics.nn.modules import (
     HyperACE,
     DownsampleConv,
     FullPAD_Tunnel,
-    DSC3k2
+    DSC3k2,
+    Reshape,
+    YOLOv1Detect
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -80,6 +82,7 @@ from ultralytics.utils.loss import (
     v8OBBLoss,
     v8PoseLoss,
     v8SegmentationLoss,
+    YOLOv1Loss,
 )
 from ultralytics.utils.ops import make_divisible
 from ultralytics.utils.plotting import feature_visualization
@@ -390,6 +393,10 @@ class DetectionModel(BaseModel):
 
     def init_criterion(self):
         """Initialize the loss criterion for the DetectionModel."""
+        #to realize yolov1
+        m = self.model[-1]  # last layer
+        if isinstance(m, YOLOv1Detect):
+            return YOLOv1Loss(self)
         return E2EDetectLoss(self) if getattr(self, "end2end", False) else v8DetectionLoss(self)
 
 
@@ -1064,6 +1071,10 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
             if m in {Detect, Segment, Pose, OBB}:
                 m.legacy = legacy
+        #to realize yolov1
+        elif m is YOLOv1Detect:
+            # YOLOv1Detect doesn't need channel list, just use the nc parameter
+            pass
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])
         elif m in {CBLinear, TorchVision, Index}:
@@ -1095,6 +1106,10 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
                 c2 =c1
         elif m is FullPAD_Tunnel:
             c2 = ch[f[0]]
+        #to realize yolov1
+        elif m is Reshape:
+            # Reshape doesn't change channel count
+            c2 = ch[f]
         else:
             c2 = ch[f]
 
@@ -1195,7 +1210,7 @@ def guess_model_task(model):
                 return "pose"
             elif isinstance(m, OBB):
                 return "obb"
-            elif isinstance(m, (Detect, WorldDetect, v10Detect)):
+            elif isinstance(m, (Detect, WorldDetect, v10Detect, YOLOv1Detect)):
                 return "detect"
 
     # Guess from model filename

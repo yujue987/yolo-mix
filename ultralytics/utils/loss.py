@@ -741,3 +741,200 @@ class E2EDetectLoss:
         one2one = preds["one2one"]
         loss_one2one = self.one2one(one2one, batch)
         return loss_one2many[0] + loss_one2one[0], loss_one2many[1] + loss_one2one[1]
+
+# to realize yolov1
+class YOLOv1Loss:
+    """YOLOv1 loss function for the original YOLO architecture."""
+
+    def __init__(self, model):
+        """Initialize YOLOv1 loss with model."""
+        device = next(model.parameters()).device
+        h = model.args  # hyperparameters
+        m = model.model[-1]  # YOLOv1Detect() module
+        
+        self.device = device
+        self.hyp = h
+        self.nc = m.nc  # number of classes
+        self.lambda_coord = 5.0  # weight for coordinate loss
+        self.lambda_noobj = 0.5  # weight for no-object loss
+        
+        # Loss functions
+        self.mse = nn.MSELoss(reduction='sum')
+        self.bce = nn.BCELoss(reduction='sum')
+    
+    def __call__(self, preds, batch):
+        """Calculate YOLOv1 loss."""
+        device = self.device
+        batch_size = preds.shape[0]
+        
+        # preds shape: [batch_size, 7, 7, 30] for PASCAL VOC (nc=20)
+        # 30 = 2*5 + 20 (2 boxes * 5 params + 20 classes)
+        S = 7  # grid size
+        B = 2  # boxes per cell
+        C = self.nc  # number of classes
+        
+        # Initialize losses
+        coord_loss = 0.0
+        conf_loss = 0.0
+        noobj_loss = 0.0
+        class_loss = 0.0
+        
+        # Process ground truth
+        targets = batch['bboxes']  # [N, 4] in normalized xywh format
+        labels = batch['cls']      # [N] class indices
+        batch_idx = batch['batch_idx']  # [N] batch indices
+        
+        for b in range(batch_size):
+            # Get predictions for this batch item
+            pred = preds[b]  # [7, 7, 30]
+            
+            # Get ground truth for this batch item
+            mask = batch_idx == b
+            if mask.sum() == 0:
+                continue
+                
+            target_boxes = targets[mask]  # [n_obj, 4] normalized xywh
+            target_labels = labels[mask]  # [n_obj] class indices
+            
+            # Process each object in the image
+            for target_box, target_label in zip(target_boxes, target_labels):
+                # Convert normalized coordinates to grid coordinates
+                x, y, w, h = target_box
+                i = int(x * S)  # grid cell x
+                j = int(y * S)  # grid cell y
+                
+                # Clamp to valid grid range
+                i = min(i, S-1)
+                j = min(j, S-1)
+                
+                # Get cell predictions
+                cell_pred = pred[j, i]  # [30]
+                
+                # Split predictions
+                box1_pred = cell_pred[:5]    # [x, y, w, h, conf]
+                box2_pred = cell_pred[5:10]  # [x, y, w, h, conf]
+                class_pred = cell_pred[10:]  # [20] class probabilities
+                
+                # Calculate IoU for both predicted boxes
+                # Convert grid-relative coordinates to normalized coordinates
+                box1_x = (box1_pred[0] + i) / S
+                box1_y = (box1_pred[1] + j) / S
+                box1_w = box1_pred[2]
+                box1_h = box1_pred[3]
+                
+                box2_x = (box2_pred[0] + i) / S
+                box2_y = (box2_pred[1] + j) / S
+                box2_w = box2_pred[2]
+                box2_h = box2_pred[3]
+                
+                # Calculate IoU (simplified version)
+                iou1 = self.calculate_iou([box1_x, box1_y, box1_w, box1_h], [x, y, w, h])
+                iou2 = self.calculate_iou([box2_x, box2_y, box2_w, box2_h], [x, y, w, h])
+                
+                # Choose the box with higher IoU as responsible
+                if iou1 > iou2:
+                    responsible_box = box1_pred
+                    responsible_idx = 0
+                else:
+                    responsible_box = box2_pred
+                    responsible_idx = 1
+                
+                # Coordinate loss (for responsible box)
+                target_x = x * S - i  # relative to grid cell
+                target_y = y * S - j  # relative to grid cell
+                target_w = w
+                target_h = h
+                
+                coord_loss += (responsible_box[0] - target_x) ** 2
+                coord_loss += (responsible_box[1] - target_y) ** 2
+                coord_loss += (torch.sqrt(responsible_box[2]) - torch.sqrt(target_w)) ** 2
+                coord_loss += (torch.sqrt(responsible_box[3]) - torch.sqrt(target_h)) ** 2
+                
+                # Confidence loss (for responsible box)
+                conf_loss += (responsible_box[4] - 1.0) ** 2
+                
+                # No-object loss (for non-responsible box)
+                non_responsible_idx = 1 - responsible_idx
+                non_responsible_box = box1_pred if non_responsible_idx == 0 else box2_pred
+                noobj_loss += (non_responsible_box[4] - 0.0) ** 2
+                
+                # Class loss
+                target_class = torch.zeros(C, device=device)
+                target_class[int(target_label)] = 1.0
+                class_loss += torch.sum((class_pred - target_class) ** 2)
+        
+        # Add no-object loss for all other cells
+        for b in range(batch_size):
+            pred = preds[b]
+            mask = batch_idx == b
+            if mask.sum() == 0:
+                # No objects in this image, all cells should predict no object
+                for i in range(S):
+                    for j in range(S):
+                        cell_pred = pred[j, i]
+                        noobj_loss += (cell_pred[4] - 0.0) ** 2  # box 1 confidence
+                        noobj_loss += (cell_pred[9] - 0.0) ** 2  # box 2 confidence
+            else:
+                target_boxes = targets[mask]
+                # For cells without objects, add no-object loss
+                occupied_cells = set()
+                for target_box in target_boxes:
+                    x, y, _, _ = target_box
+                    i = min(int(x * S), S-1)
+                    j = min(int(y * S), S-1)
+                    occupied_cells.add((i, j))
+                
+                for i in range(S):
+                    for j in range(S):
+                        if (i, j) not in occupied_cells:
+                            cell_pred = pred[j, i]
+                            noobj_loss += (cell_pred[4] - 0.0) ** 2  # box 1 confidence
+                            noobj_loss += (cell_pred[9] - 0.0) ** 2  # box 2 confidence
+        
+        # Weight the losses
+        total_loss = (
+            self.lambda_coord * coord_loss +
+            conf_loss +
+            self.lambda_noobj * noobj_loss +
+            class_loss
+        )
+        
+        # Normalize by batch size
+        total_loss = total_loss / batch_size
+        
+        # Return loss and loss items for logging
+        coord_loss_detached = coord_loss.detach() if hasattr(coord_loss, 'detach') else coord_loss
+        conf_loss_detached = conf_loss.detach() if hasattr(conf_loss, 'detach') else conf_loss
+        noobj_loss_detached = noobj_loss.detach() if hasattr(noobj_loss, 'detach') else noobj_loss
+        class_loss_detached = class_loss.detach() if hasattr(class_loss, 'detach') else class_loss
+        
+        loss_items = torch.tensor([coord_loss_detached, conf_loss_detached, noobj_loss_detached, class_loss_detached], device=device) / batch_size
+        
+        return total_loss, loss_items.detach()
+    
+    def calculate_iou(self, box1, box2):
+        """Calculate IoU between two boxes in xywh format."""
+        # Convert to corner coordinates
+        x1, y1, w1, h1 = box1
+        x2, y2, w2, h2 = box2
+        
+        box1_x1, box1_y1 = x1 - w1/2, y1 - h1/2
+        box1_x2, box1_y2 = x1 + w1/2, y1 + h1/2
+        box2_x1, box2_y1 = x2 - w2/2, y2 - h2/2
+        box2_x2, box2_y2 = x2 + w2/2, y2 + h2/2
+        
+        # Calculate intersection
+        inter_x1 = max(box1_x1, box2_x1)
+        inter_y1 = max(box1_y1, box2_y1)
+        inter_x2 = min(box1_x2, box2_x2)
+        inter_y2 = min(box1_y2, box2_y2)
+        
+        if inter_x2 <= inter_x1 or inter_y2 <= inter_y1:
+            return 0.0
+        
+        inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+        box1_area = w1 * h1
+        box2_area = w2 * h2
+        union_area = box1_area + box2_area - inter_area
+        
+        return inter_area / union_area if union_area > 0 else 0.0
