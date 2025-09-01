@@ -11,4 +11,4 @@ model = YOLO("yolov1.yaml")
 # model = YOLO("yolo11n.yaml").load("yolo11n.pt")
 
 # Train the model
-results = model.train(data="voc.yaml", epochs=1, imgsz=640)
+results = model.train(data="VOC.yaml", epochs=1, imgsz=640)
