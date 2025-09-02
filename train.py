@@ -26,6 +26,6 @@ from ultralytics import YOLO
 # model = YOLO("yolov4.yaml")
 # results = model.train(data="coco8.yaml", epochs=1, imgsz=640)
 
-#yolov7
-model = YOLO("ultralytics/cfg/models/v7-/yolov7.yaml")
-results = model.train(data="coco8.yaml", epochs=1, imgsz=640, batch=1, device='cpu')
+# #yolov7
+# model = YOLO("yolov7.yaml")
+# results = model.train(data="coco8.yaml", epochs=1, imgsz=640)
