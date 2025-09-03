@@ -405,7 +405,7 @@ head:
   - [[17, 20, 23], 1, Detect, [nc]] # Detect(P3, P4, P5)
 
 ```
-![v5](D:\Code\ob\code\pict\v5.jpg)
+![v5](pict/v5.jpg)
 ### YOLOv5 介绍
 
 #### Backbone
@@ -499,7 +499,7 @@ head:
 
 ```
 
-![v6](D:\Code\ob\code\pict\v6.jpeg)
+![v6](pict/v6.jpeg)
 ### YOLOv6 介绍
 
 #### Backbone
@@ -603,7 +603,7 @@ head:
   - [[19, 22, 25], 1, RepConv, []]  # 重参数化卷积
   - [[-3, -2, -1], 1, YOLOv7AuxDetect, [nc, anchors]]   # 辅助检测层
 ```
-![v7](D:\Code\ob\code\pict\v7.png)
+![v7](pict/v7.png)
 ### YOLOv7 介绍
 
 #### Backbone
@@ -696,7 +696,7 @@ head:
   - [[15, 18, 21], 1, Detect, [nc]] # Detect(P3, P4, P5)
 
 ```
-![v8](D:\Code\ob\code\pict\v8.jpg)
+![v8](pict/v8.jpg)
 ### YOLOv8 介绍
 #### Backbone
 - Conv: 标准卷积层，用于初始特征提取，参数包括输出通道、内核大小和步幅。
@@ -756,7 +756,7 @@ head:
   - [[15, 18, 21], 1, Detect, [nc]] # Detect(P3, P4, P5)
 
 ```
-![v9](D:\Code\ob\code\pict\v9.jpg)
+![v9](pict/v9.jpg)
 ### YOLOv9 介绍
 #### Backbone
 - Conv: 标准卷积层，用于特征提取。
@@ -821,7 +821,7 @@ head:
   - [[16, 19, 22], 1, v10Detect, [nc]] # Detect(P3, P4, P5)
 
 ```
-![v10](D:\Code\ob\code\pict\v10.jpg)
+![v10](pict/v10.jpg)
 ### YOLOv10 介绍
 #### Backbone
 - Conv: 卷积层。
@@ -893,7 +893,7 @@ head:
   - [[16, 19, 22], 1, Detect, [nc]] # Detect(P3, P4, P5)
 
 ```
-![v11](D:\Code\ob\code\pict\v11.png)
+![v11](pict/v11.png)
 ### YOLOv11介绍
 #### Backbone
 - Conv: 卷积层。
@@ -960,7 +960,7 @@ head:
   - [[14, 17, 20], 1, Detect, [nc]] # Detect(P3, P4, P5)
 
 ```
-![v12](D:\Code\ob\code\pict\v12.png)
+![v12](pict/v12.png)
 ### YOLOv12 介绍
 #### Backbone
 - Conv: 卷积层。
@@ -1030,7 +1030,7 @@ head:
   - [[23, 27, 31], 1, Detect, [nc]] # Detect(P3, P4, P5)
 
 ```
-![v13-1](D:\Code\ob\code\pict\v13-1.png)
+![v13-1](pict/v13-1.png)
 ### YOLOv13 介绍
 #### Backbone
 - Conv: 卷积层。
