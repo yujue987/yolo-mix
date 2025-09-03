@@ -40,7 +40,7 @@ head:
   - [-1, 1, Reshape, [7, 7, 30]]   # 26 重塑为最终输出格式
   - [[26], 1, YOLOv1Detect, [nc]]  # 27 检测层
 ```
-![v1](pict\v1.png)
+![v1](.\pict\v1.png)
 
 ### YOLOv1 介绍
 
