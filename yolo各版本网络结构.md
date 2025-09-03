@@ -133,7 +133,7 @@ head:
   # YOLOv2检测层
   - [[28], 1, YOLOv2Detect, [anchors, nc]] # 29
 ```
-![v2](D:\Code\ob\code\pict\v2.jpg)
+![v2](./pict/v2.jpg)
 ### YOLOv2 介绍
 
 #### Backbone (Darknet-19)
@@ -225,7 +225,7 @@ head:
   - [[27, 22, 15], 1, Detect, [nc]] # Detect(P3, P4, P5)
 
 ```
-![v3](D:\Code\ob\code\pict\v3.png)
+![v3](./pict/v3.png)
 ### YOLOv3 介绍
 
 #### Backbone (darknet53)
@@ -315,7 +315,7 @@ neck:
 head:
   - [[34, 38, 42], 1, YOLOv4Detect, [nc, anchors]]  # 检测层(P3, P4, P5)
 ```
-![v4](D:\Code\ob\code\pict\v4.jpg)
+![v4](pict/v4.jpg)
 ### YOLOv4 介绍
 
 #### Backbone (CSPDarknet53)
