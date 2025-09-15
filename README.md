@@ -20,3 +20,8 @@ model = YOLO("path/to/last.pt")  # load a partially trained model
 results = model.train(resume=True)
 #参考 https://docs.ultralytics.com/zh/
 ```
+
+## 对于 `模块介绍` 文件夹的介绍
+
+主要是介绍其中的模块
+对于 `nn/modle/` 下的每一个文件，在 `模块介绍` 中都有同名文件与其对应，其中是对于文件中模块的介绍。
