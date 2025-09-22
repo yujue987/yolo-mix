@@ -8,7 +8,7 @@
 
 ## 使用
 
-训练相关参数在**`ultralytics/cfg/default.yaml`**中，可以在https://docs.ultralytics.com/zh/modes/train/#train-settings 找相关参数的介绍
+训练相关参数在 **`ultralytics/cfg/default.yaml`** 中，可以在https://docs.ultralytics.com/zh/modes/train/#train-settings 找相关参数的介绍
 ```python
 #最基础的使用是
 from ultralytics import YOLO
