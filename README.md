@@ -1,4 +1,4 @@
-# yolo-try
+# yolo-mix
 
 ## 大致介绍
 
