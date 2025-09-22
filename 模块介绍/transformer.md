@@ -186,6 +186,69 @@ class AIFI(TransformerEncoderLayer):
 
 ### 参数介绍
 
+#### `c1` (通道数)
+- **类型**：`int`
+- **作用**：输入通道数，同时也是位置编码的嵌入维度。
+
+#### `cm` (中间层通道数)
+- **类型**：`int`，默认 `2048`
+- **作用**：前馈网络的中间层维度（继承自父类）。
+
+#### `num_heads` (注意力头数)
+- **类型**：`int`，默认 `8`
+- **作用**：多头注意力机制中的注意力头数量（继承自父类）。
+
+#### `dropout` (dropout比率)
+- **类型**：`float`，默认 `0.0`
+- **作用**：dropout层的丢弃概率（继承自父类）。
+
+#### `act` (激活函数)
+- **类型**：`nn.Module`，默认 `nn.GELU()`
+- **作用**：前馈网络中的激活函数（继承自父类）。
+
+#### `normalize_before` (预归一化标志)
+- **类型**：`bool`，默认 `False`
+- **作用**：是否在注意力前进行层归一化（继承自父类）。
+
+### 成员属性
+
+> 继承自 `TransformerEncoderLayer`，包括：
+- `self.ma`：多头自注意力模块
+- `self.fc1/self.fc2`：前馈网络线性层
+- `self.norm1/self.norm2`：层归一化层
+- `self.dropout/self.dropout1/self.dropout2`：dropout层
+- `self.act`：激活函数实例
+- `self.normalize_before`：归一化顺序标志
+
+### 成员方法
+
+#### `build_2d_sincos_position_embedding(w, h, embed_dim=256, temperature=10000.0)`
+- **类型**：静态方法
+- **作用**：构建适用于2D空间（如图像特征图）的正弦-余弦位置编码。
+- **参数**：
+  - `w`, `h`：宽度和高度
+  - `embed_dim`：嵌入维度，默认256（通常等于c1）
+  - `temperature`：频率缩放因子，默认10000.0
+- **返回**：形状为 `[1, H×W, embed_dim]` 的2D位置编码张量。
+- **原理**：分别对x、y方向生成sin/cos编码，拼接后形成四部分位置编码，适配图像的空间结构。
+
+#### `forward(self, x)`
+- **作用**：AIFI层的主前向传播函数，专为处理2D特征图设计。
+- **输入**：`x`，形状为 `[B, C, H, W]` 的张量
+- **步骤**：
+  1. 提取特征图的空间尺寸 `(C, H, W)`
+  2. 生成与当前特征图匹配的2D正弦-余弦位置编码
+  3. 将输入展平并转置为序列格式 `[B, H×W, C]`
+  4. 调用父类 `TransformerEncoderLayer.forward()`，传入位置编码
+  5. 将输出还原为原始2D形状 `[B, C, H, W]`
+- **返回**：经过Transformer编码器层处理并恢复空间结构的特征图。
+
+### 作用
+
+**AIFI（Attention-based Intra-scale Feature Interaction）是专为2D特征图设计的Transformer编码器层。**
+
+它继承标准 `TransformerEncoderLayer`，但重写了 `forward` 方法以支持图像/特征图输入。通过内置的2D正弦-余弦位置编码，AIFI能够在不破坏空间结构的前提下，利用Transformer强大的全局建模能力实现特征图内像素/区域间的长程交互。该模块特别适用于目标检测、分割等视觉任务中，在保留CNN局部性的同时引入全局上下文建模能力，提升模型对复杂场景的理解能力。
+
 ## TransformerLayer(类)
 
 ### 类代码
