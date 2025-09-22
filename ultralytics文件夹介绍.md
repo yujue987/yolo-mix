@@ -1,4 +1,4 @@
-# Ultralytics 模块详细介绍
+# Ultralytics 详细介绍
 
 ##  根目录文件
 
