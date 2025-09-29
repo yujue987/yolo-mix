@@ -210,7 +210,7 @@ class HGStem(nn.Module):
         x = self.stem4(x)
         return x
 ```
-
+![HGStem](../../pict/pict/HGBlock-HGStem.png)
 ### 参数介绍
 
 #### `c1` (输入通道数)
