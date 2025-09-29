@@ -323,7 +323,7 @@ class HGBlock(nn.Module):
         y = self.ec(self.sc(torch.cat(y, 1)))
         return y + x if self.add else y
 ```
-
+![HGBlock](../pict/HGBlock-HGStem.png)
 ### 参数介绍
 
 #### `c1` (输入通道数)
@@ -443,7 +443,7 @@ class SPP(nn.Module):
         x = self.cv1(x)
         return self.cv2(torch.cat([x] + [m(x) for m in self.m], 1))
 ```
-
+![SPP](../pict/SPP.png)
 ### 参数介绍
 
 #### `c1` (输入通道数)
@@ -541,7 +541,7 @@ class SPPF(nn.Module):
         y.extend(self.m(y[-1]) for _ in range(3))
         return self.cv2(torch.cat(y, 1))
 ```
-
+![SPPF](../pict/SPPF.png)
 ### 参数介绍
 
 #### `c1` (输入通道数)
